@@ -7,6 +7,7 @@ from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from typing import List
 from pydantic import BaseModel, Field
+from langchain.load import dumps, loads
 
 # Load environment variables from .env file
 load_dotenv()
@@ -169,7 +170,7 @@ llm = ChatGoogleGenerativeAI(
 )
 structured_llm = llm.with_structured_output(ImprovedQueries)
 
-user_query = input("Enter your query in here: ")
+user_query = "How to create a git branch ?"
 
 messages = [
     (
@@ -184,8 +185,6 @@ response = structured_llm.invoke(messages)
 improved_queries = response.queries
 
 all_documents = []
-
-# Method 1 -> parallel query (FANOUT)
 print("Fetching the relevant chunks")
 
 def search_with_retry(vector_store, query, max_retries=3, delay=2):
@@ -208,23 +207,46 @@ for improved_query in improved_queries:
     all_documents.append(relevant_chunks)
 
 # filtering the unique ones
-def filter_unique_by_content(all_documents):
-    """Filter unique documents based on their page_content"""
-    seen_content = set()
-    unique_documents = []
+# Method 1 -> parallel query (FANOUT)
+# def filter_unique_by_content(all_documents):
+#     """Filter unique documents based on their page_content"""
+#     seen_content = set()
+#     unique_documents = []
     
-    for doc_list in all_documents:
-        for doc in doc_list:
-            # Use page_content as unique identifier
-            content_hash = doc.page_content
-            if content_hash not in seen_content:
-                seen_content.add(content_hash)
-                unique_documents.append(doc)
+#     for doc_list in all_documents:
+#         for doc in doc_list:
+#             # Use page_content as unique identifier
+#             content_hash = doc.page_content
+#             if content_hash not in seen_content:
+#                 seen_content.add(content_hash)
+#                 unique_documents.append(doc)
     
-    return unique_documents
+#     return unique_documents
 
-unique_relevant_chunks = filter_unique_by_content(all_documents=all_documents)
+# unique_relevant_chunks = filter_unique_by_content(all_documents=all_documents)
 
+# Method 2 -> Rank Fusion
+fused_scores = {}
+k=60
+for docs in all_documents:
+  for rank, doc in enumerate(docs):
+    doc_str = dumps(doc)
+    # If the document is not yet in the fused_scores dictionary, add it with an initial score of 0
+    # print('\n')
+    if doc_str not in fused_scores:
+      fused_scores[doc_str] = 0
+    # Retrieve the current score of the document, if any
+    previous_score = fused_scores[doc_str]
+    # Update the score of the document using the RRF formula: 1 / (rank + k)
+    fused_scores[doc_str] += 1 / (rank + k)
+
+# final reranked result
+unique_relevant_chunks = [
+    (loads(doc), score)
+    for doc, score in sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+]
+
+# Calling the LLM for answering the user query
 # Check if we found any relevant chunks
 if not unique_relevant_chunks:
     print("No relevant documents found for your query. This could be due to:")
