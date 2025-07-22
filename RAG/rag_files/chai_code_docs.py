@@ -247,75 +247,100 @@ for improved_query in improved_queries:
 # ]
 
 # Method 3 -> Query Decomposition
-class SubQueries(BaseModel):
-    """Information about sub-queries for query decomposition."""
-    sub_queries: List[str] = Field(..., description="List of sub-queries that break down the complex query into simpler parts")
+# class SubQueries(BaseModel):
+#     """Information about sub-queries for query decomposition."""
+#     sub_queries: List[str] = Field(..., description="List of sub-queries that break down the complex query into simpler parts")
 
-QUERY_DECOMPOSITION_PROMPT = '''
-You are an AI assistant that breaks down complex queries into simpler sub-queries for better document retrieval.
+# QUERY_DECOMPOSITION_PROMPT = '''
+# You are an AI assistant that breaks down complex queries into simpler sub-queries for better document retrieval.
 
-Given a complex user query, decompose it into 3-5 focused sub-queries that address different aspects of the original question.
+# Given a complex user query, decompose it into 3-5 focused sub-queries that address different aspects of the original question.
 
-For example:
-user_query = "Compare the performance and security features of React vs Vue, and which one is better for enterprise applications?"
-sub_queries = [
-    "What are the performance characteristics of React?",
-    "What are the security features of React?", 
-    "What are the performance characteristics of Vue?",
-    "What are the security features of Vue?",
-    "React vs Vue comparison for enterprise applications"
-]
+# For example:
+# user_query = "Compare the performance and security features of React vs Vue, and which one is better for enterprise applications?"
+# sub_queries = [
+#     "What are the performance characteristics of React?",
+#     "What are the security features of React?", 
+#     "What are the performance characteristics of Vue?",
+#     "What are the security features of Vue?",
+#     "React vs Vue comparison for enterprise applications"
+# ]
 
-The user query is: {user_query}
+# The user query is: {user_query}
 
-IMPORTANT:
-1. Create focused, specific sub-queries
-2. Each sub-query should address a different aspect of the original query
-3. Sub-queries should be simpler than the original query
-4. RESPOND ONLY WITH THE SUB-QUERIES IN A LIST FORMAT
-5. Do not add any additional text or explanation
+# IMPORTANT:
+# 1. Create focused, specific sub-queries
+# 2. Each sub-query should address a different aspect of the original query
+# 3. Sub-queries should be simpler than the original query
+# 4. RESPOND ONLY WITH THE SUB-QUERIES IN A LIST FORMAT
+# 5. Do not add any additional text or explanation
+# '''
+
+# decomposition_llm = llm.with_structured_output(SubQueries)
+
+# print("Decomposing the query into sub-queries")
+# decomposition_messages = [
+#     (
+#         "system",
+#         QUERY_DECOMPOSITION_PROMPT.format(user_query=user_query)
+#     ),
+#     ("user", user_query)
+# ]
+
+# decomposition_response = decomposition_llm.invoke(decomposition_messages)
+# sub_queries = decomposition_response.sub_queries
+
+# print(f"Generated {len(sub_queries)} sub-queries:")
+# for i, sq in enumerate(sub_queries, 1):
+#     print(f"{i}. {sq}")
+
+# # Collect documents from all sub-queries
+# decomposition_documents = []
+# for sub_query in sub_queries:
+#     relevant_chunks = search_with_retry(vector_store, sub_query)
+#     decomposition_documents.append(relevant_chunks)
+
+# # Filter unique documents from decomposition results
+# def filter_unique_by_content_decomposition(all_documents):
+#     """Filter unique documents based on their page_content"""
+#     seen_content = set()
+#     unique_documents = []
+    
+#     for doc_list in all_documents:
+#         for doc in doc_list:
+#             content_hash = doc.page_content
+#             if content_hash not in seen_content:
+#                 seen_content.add(content_hash)
+#                 unique_documents.append(doc)
+    
+#     return unique_documents
+
+# unique_relevant_chunks = filter_unique_by_content_decomposition(all_documents=decomposition_documents)
+
+# Method 4 -> Hypothetical document embedding
+HYDE_SYSTEM_PROMPT = '''
+    Imagine you are an expert writing a detailed explanation on the topic: '{query}'
+    Your response should be comprehensive and include all key points that would be found in the top search result. 
 '''
 
-decomposition_llm = llm.with_structured_output(SubQueries)
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    temperature=0.3,
+    google_api_key=os.environ.get("GOOGLE_API_KEY"),
+)
 
-print("Decomposing the query into sub-queries")
-decomposition_messages = [
+messages = [
     (
         "system",
-        QUERY_DECOMPOSITION_PROMPT.format(user_query=user_query)
+        HYDE_SYSTEM_PROMPT.format(query=user_query)
     ),
     ("user", user_query)
 ]
 
-decomposition_response = decomposition_llm.invoke(decomposition_messages)
-sub_queries = decomposition_response.sub_queries
+response = llm.invoke(messages)
 
-print(f"Generated {len(sub_queries)} sub-queries:")
-for i, sq in enumerate(sub_queries, 1):
-    print(f"{i}. {sq}")
-
-# Collect documents from all sub-queries
-decomposition_documents = []
-for sub_query in sub_queries:
-    relevant_chunks = search_with_retry(vector_store, sub_query)
-    decomposition_documents.append(relevant_chunks)
-
-# Filter unique documents from decomposition results
-def filter_unique_by_content_decomposition(all_documents):
-    """Filter unique documents based on their page_content"""
-    seen_content = set()
-    unique_documents = []
-    
-    for doc_list in all_documents:
-        for doc in doc_list:
-            content_hash = doc.page_content
-            if content_hash not in seen_content:
-                seen_content.add(content_hash)
-                unique_documents.append(doc)
-    
-    return unique_documents
-
-unique_relevant_chunks = filter_unique_by_content_decomposition(all_documents=decomposition_documents)
+hypothetical_document = response.content
+unique_relevant_chunks = search_with_retry(vector_store, hypothetical_document)
 
 # Calling the LLM for answering the user query
 # Check if we found any relevant chunks
