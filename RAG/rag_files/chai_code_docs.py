@@ -170,7 +170,7 @@ llm = ChatGoogleGenerativeAI(
 )
 structured_llm = llm.with_structured_output(ImprovedQueries)
 
-user_query = "How to create a git branch ?"
+user_query = "What are the differences between Django and DevOps, and which one should I learn first for web development?"
 
 messages = [
     (
@@ -226,25 +226,96 @@ for improved_query in improved_queries:
 # unique_relevant_chunks = filter_unique_by_content(all_documents=all_documents)
 
 # Method 2 -> Rank Fusion
-fused_scores = {}
-k=60
-for docs in all_documents:
-  for rank, doc in enumerate(docs):
-    doc_str = dumps(doc)
-    # If the document is not yet in the fused_scores dictionary, add it with an initial score of 0
-    # print('\n')
-    if doc_str not in fused_scores:
-      fused_scores[doc_str] = 0
-    # Retrieve the current score of the document, if any
-    previous_score = fused_scores[doc_str]
-    # Update the score of the document using the RRF formula: 1 / (rank + k)
-    fused_scores[doc_str] += 1 / (rank + k)
+# fused_scores = {}
+# k=60
+# for docs in all_documents:
+#   for rank, doc in enumerate(docs):
+#     doc_str = dumps(doc)
+#     # If the document is not yet in the fused_scores dictionary, add it with an initial score of 0
+#     # print('\n')
+#     if doc_str not in fused_scores:
+#       fused_scores[doc_str] = 0
+#     # Retrieve the current score of the document, if any
+#     previous_score = fused_scores[doc_str]
+#     # Update the score of the document using the RRF formula: 1 / (rank + k)
+#     fused_scores[doc_str] += 1 / (rank + k)
 
-# final reranked result
-unique_relevant_chunks = [
-    (loads(doc), score)
-    for doc, score in sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+# # final reranked result
+# unique_relevant_chunks = [
+#     (loads(doc), score)
+#     for doc, score in sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+# ]
+
+# Method 3 -> Query Decomposition
+class SubQueries(BaseModel):
+    """Information about sub-queries for query decomposition."""
+    sub_queries: List[str] = Field(..., description="List of sub-queries that break down the complex query into simpler parts")
+
+QUERY_DECOMPOSITION_PROMPT = '''
+You are an AI assistant that breaks down complex queries into simpler sub-queries for better document retrieval.
+
+Given a complex user query, decompose it into 3-5 focused sub-queries that address different aspects of the original question.
+
+For example:
+user_query = "Compare the performance and security features of React vs Vue, and which one is better for enterprise applications?"
+sub_queries = [
+    "What are the performance characteristics of React?",
+    "What are the security features of React?", 
+    "What are the performance characteristics of Vue?",
+    "What are the security features of Vue?",
+    "React vs Vue comparison for enterprise applications"
 ]
+
+The user query is: {user_query}
+
+IMPORTANT:
+1. Create focused, specific sub-queries
+2. Each sub-query should address a different aspect of the original query
+3. Sub-queries should be simpler than the original query
+4. RESPOND ONLY WITH THE SUB-QUERIES IN A LIST FORMAT
+5. Do not add any additional text or explanation
+'''
+
+decomposition_llm = llm.with_structured_output(SubQueries)
+
+print("Decomposing the query into sub-queries")
+decomposition_messages = [
+    (
+        "system",
+        QUERY_DECOMPOSITION_PROMPT.format(user_query=user_query)
+    ),
+    ("user", user_query)
+]
+
+decomposition_response = decomposition_llm.invoke(decomposition_messages)
+sub_queries = decomposition_response.sub_queries
+
+print(f"Generated {len(sub_queries)} sub-queries:")
+for i, sq in enumerate(sub_queries, 1):
+    print(f"{i}. {sq}")
+
+# Collect documents from all sub-queries
+decomposition_documents = []
+for sub_query in sub_queries:
+    relevant_chunks = search_with_retry(vector_store, sub_query)
+    decomposition_documents.append(relevant_chunks)
+
+# Filter unique documents from decomposition results
+def filter_unique_by_content_decomposition(all_documents):
+    """Filter unique documents based on their page_content"""
+    seen_content = set()
+    unique_documents = []
+    
+    for doc_list in all_documents:
+        for doc in doc_list:
+            content_hash = doc.page_content
+            if content_hash not in seen_content:
+                seen_content.add(content_hash)
+                unique_documents.append(doc)
+    
+    return unique_documents
+
+unique_relevant_chunks = filter_unique_by_content_decomposition(all_documents=decomposition_documents)
 
 # Calling the LLM for answering the user query
 # Check if we found any relevant chunks
